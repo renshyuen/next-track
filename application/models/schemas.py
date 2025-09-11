@@ -1,8 +1,8 @@
+# /application/models/schemas.py
+
 from pydantic import BaseModel
 from typing import List
 
-
-# ====== Input Schemas ======
 
 class TrackInfo(BaseModel):
     track_id: str
@@ -11,12 +11,8 @@ class TrackInfo(BaseModel):
 
 
 class TrackRequest(BaseModel):
-    track_ids: List[str]        # track IDs
-    language: str
-
-
-
-# ====== Output Schemas ======
+    track_ids: List[str]
+    
 
 class RecommendationResponse(BaseModel):
     recommended_track: TrackInfo

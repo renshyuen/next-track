@@ -1,9 +1,14 @@
+# /application/core/explainability.py
+
 class ExplanationGenerator:
     @staticmethod
     def explain():
         """
-        Generate an explanation for the model's predictions.
+        DESCRIPTION
 
+        PARAMETERS:
+            param1 (type): Description of param1.
+            param2 (type): Description of param2.
         """
-        # (e.g. similarity-based, feature-specific, genre/artist explanations)
+        pass
       
