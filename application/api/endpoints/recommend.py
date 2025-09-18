@@ -1,123 +1,185 @@
 # /application/api/endpoints/recommend.py
 
 import os
+import logging
+import pandas as pd 
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
-from typing import List, Optional
-from application.models.schemas import RecommendationResponse, TrackRequest, TrackInfo
+from fastapi import APIRouter, HTTPException, status
+from typing import List, Optional, Dict, Any 
 from application.core.recommender import NextTrackContentBasedRecommender
+from application.models.schemas import RecommendationResponse, TrackRequest, TrackInfo, PreferenceParameters, RecommendationStrategy, ErrorResponse
 
 
-router = APIRouter()    # creates an API router object to attach endpoints
+router = APIRouter() 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Get the project root directory (2 levels up from this file)
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-DATA_CSV_PATH = os.path.join(PROJECT_ROOT, 'data', 'spotify_tracks_reduced.csv')
-# Add debug print to verify path (you can remove this after confirming)
-print(f"Looking for data file at: {DATA_CSV_PATH}")
-# Verify the file exists
-if not os.path.exists(DATA_CSV_PATH):
-    raise FileNotFoundError(f"Data file not found at: {DATA_CSV_PATH}")
+dataset_path = Path(os.getenv('DATASET_PATH', 'application/data/cleaned_spotify_tracks.csv'))
 
-# == RECOMMENDER LIFECYCLE
+if not dataset_path.is_file():
+    raise RuntimeError(f"Dataset file not found at {dataset_path}")
+
 try:
-    recommender = NextTrackContentBasedRecommender.from_csv(DATA_CSV_PATH)
+    logger.info(f"Loading dataset from {dataset_path}") 
+    dataframe = pd.read_csv(dataset_path)
+    logger.info(f"Loaded {len(dataframe)} tracks")
+    recommender = NextTrackContentBasedRecommender(dataframe)
+    logger.info("Recommender initialised successfully")
+    
 except Exception as e:
-    raise RuntimeError(f"Failed to initialise recommender: {e}")    # fail fast on startup if model loading fails, rather than per request
+    # FAIL FAST ON STARTUP IF MODEL LOADING FAILS, RATHER THAN PER REQUEST
+    logger.error(f"Failed to initialise recommender: {e}")
+    raise RuntimeError(f"Failed to initialise recommender: {e}")    
 
-
-def _validate_input_track_ids(track_ids: List[str]) -> List[str]:
-    """
-    DESCRIPTION:
-        This helper method validates and processes the input track identifiers from the API request.
-    """
-    if not track_ids:
-        raise HTTPException(status_code=400, detail="Provide at least one input track identifier.")
-
-    # remove duplicates while preserving order
-    # in Python, None evaluates to Fals in boolean context
+def _validate_and_process_user_input(request: TrackRequest) -> tuple:
+    """ """
+    if not request.track_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide at least one track identifier."
+        )
+    
+    # REMOVE DUPLICATES WHILE PRESERVING ORDER
     seen = set()
-    input_tracks_ids = [track_id for track_id in track_ids if not (track_id in seen or seen.add(track_id))]
+    unique_track_ids = [track_id for track_id in request.track_ids if not (track_id in seen or seen.add(track_id))]
 
-    validated_input_track_ids: List[str] = []
+    # VALIDATE TRACK IDS EXIST IN DATASET
+    validated_track_ids = []
+    invalid_track_ids = []
 
-    # validate each input track_id exists in the dataset
-    # prefer using recommender's internal mapping if available
-    # otherwise, fallback to searching the dataframe
-    for track_id in input_tracks_ids:
+    for track_id in unique_track_ids:
         if track_id in recommender.track_id_to_index:
-            validated_input_track_ids.append(track_id)
-        elif hasattr(recommender, 'dataframe'):
-            dataframe = recommender.dataframe
-            if 'track_id' in dataframe.columns and (dataframe['track_id'] == track_id).any():
-                validated_input_track_ids.append(track_id)
-
-    if not validated_input_track_ids:
-        raise HTTPException(status_code=400, detail="The provided track ID(s) do not exist in the dataset.")
+            validated_track_ids.append(track_id)
+        else:
+            invalid_track_ids.append(track_id)
     
-    return validated_input_track_ids
-
-
-def _to_track_info(track_id: str) -> TrackInfo:
-    """
-    DESCRIPTION:
-        This helper method converts a track identifier to a TrackInfo object using recommender's metadata.
-        Maps:
-        - dataframe['track_name'] -> track_title
-        - dataframe['artists'] -> artist_name
-    """
-    track_title: Optional[str] = None
-    artist_name: Optional[str] = None
-
-    if hasattr(recommender, 'dataframe'):
-        dataframe = recommender.dataframe
-        row = dataframe.loc[dataframe['track_id'] == track_id]
-        if not row.empty:
-            track_title = row['track_name'] if 'track_name' in row else None
-            artist_name = row['artists'] if 'artists' in row else None
+    if not validated_track_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"None of the provided track IDs exist in the dataset. Invalid IDs: {invalid_track_ids}"
+        )
     
-    # ensure required fields (schema requires all three)
-    return TrackInfo(
-        track_id=str(track_id),
-        track_title=str(track_title) if track_title else "",
-        artist_name=str(artist_name) if artist_name else "",
-    )
-
-
-def _default_explanation() -> str:
-    return "Recommended based on similar audio features to your input track(s)."
+    # LOG WARNING FOR INVALID IDS BUT CONTINUE WITH VALID ONES
+    if invalid_track_ids:
+        logger.warning(f"Some track IDs not found: {invalid_ids}")
     
+    # PROCESS PREFERENCES IF PROVIDED
+    processed_preferences = None 
+    if request.preferences:
+        processed_preferences = {}
 
-@router.post('/recommend', response_model=RecommendationResponse)
-async def recommend_next_track(request: TrackRequest):
-    """
-    DESCRIPTION:
-        This endpoint generates track recommendations based on input track identifiers.
-        It uses a content-based filtering approach to find similar tracks.
-    """
-    try:
-        # 1. Validate and resolve input track identifiers
-        input_track_ids = _validate_input_track_ids(request.track_ids)
-
-        # 2. Ask recommender for the best matching track
-        recommendation = recommender.next_track(input_track_ids)
-        if recommendation is None:
-            raise HTTPException(status_code=404, detail="No suitable recommendation found.")
+        # MAP PREFERENCE PARAMETERS TO FEATURE NAMES
+        if request.preferences.valence is not None:
+            processed_preferences['valence'] = request.preferences.valence
+        if request.preferences.energy is not None:
+            processed_preferences['energy'] = request.preferences.energy
+        if request.preferences.danceability is not None:
+            processed_preferences['danceability'] = request.preferences.danceability
+        if request.preferences.acousticness is not None:
+            processed_preferences['acousticness'] = request.preferences.acousticness
+        if request.preferences.instrumentalness is not None:
+            processed_preferences['instrumentalness'] = request.preferences.instrumentalness
+        if request.preferences.tempo is not None:
+            # NORMALISE TEMPO TO 0-1 RANGE (60-200 BPM RANGE)
+            processed_preferences['tempo'] = (request.preferences.tempo - 60) / 140
         
-        # 3. Map to TrackInfo
+        # HANDLE ADDITIONAL PREFERENCES
+        if request.preferences.popular:
+            processed_preferences['popular'] = True
+        if request.preferences.temporal_preference:
+            processed_preferences['temporal_preference'] = request.preferences.temporal_preference
+    
+    return validated_track_ids, processed_preferences
+
+def _calculate_confidence_score(similarity: float, strategy: str, num_input_tracks: int) -> float:
+    """
+    """
+    base_confidence_score = similarity
+
+    # ADJUST BASED ON NUMBER OF INPUT TRACKS (MORE TRACKS = HIGHER CONFIDENCE)
+    track_factor = min(1.0, num_input_tracks / 5) # MAX BOOST AT 5 TRACKS
+
+    # STRATEGY CONFIDENCE MULTIPLIERS
+    strategy_multipliers = {
+        'weighted_average': 1.0,
+        'recent_weighted': 0.95,
+        'momentum': 0.9 if num_input_tracks >= 3 else 0.7
+    }
+    strategy_mult = strategy_multipliers.get(strategy, 1.0)
+
+    # CALCULATE FINAL CONFIDENCE
+    confidence_score = base_confidence_score * (0.7 + 0.3 * track_factor) * strategy_mult
+
+    return min(1.0, max(0.0, confidence_score))
+
+@router.post('/recommend', response_model=RecommendationResponse, responses={
+    400: {"model": ErrorResponse, "description": "Invalid request"},
+    404: {"model": ErrorResponse, "description": "No suitable recommendation found"},
+    500: {"model": ErrorResponse, "description": "Internal server error"}
+}, 
+summary="Get next track recommendation", 
+description="Returns a recommended track based on input tracks and optional preferences"
+)
+async def recommend_next_track(request: TrackRequest):
+    """ """
+    try:
+        # VALIDATE AND PROCESS USER INPUT
+        validated_track_ids, processed_preferences = _validate_and_process_user_input(request)
+
+        # LOG REQUEST DETAILS
+        logger.info(f"Processing recommendation request: {len(validated_track_ids)} tracks, strategy: {request.strategy}, preferences: {bool(processed_preferences)}")
+
+        # DETERMINE STRATEGY
+        strategy = request.strategy or RecommendationStrategy.WEIGHTED_AVERAGE
+
+        # GET DIVERSITY PENALTY
+        diversity_penalty = 0.0
+
+        # GET RECOMMENDATION FROM THE MODEL
+        recommendation = recommender.next_track(
+            input_track_ids=validated_track_ids,
+            preferences=processed_preferences,
+            strategy=strategy.value,
+            diversity_penalty=diversity_penalty
+        )
+
+        if recommendation is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No suitable recommendation found. Try different input tracks or adjust preferences."
+            )
+        
+        # CREATE A RESPONSE
         recommended_track = TrackInfo(
             track_id=recommendation['track_id'],
             track_title=recommendation['track_title'],
-            artist_name=recommendation['artist_name'],
+            artists=recommendation['artists']
         )
 
-        explanation = _default_explanation()
-        return RecommendationResponse(
-            recommended_track=recommended_track,
-            explanation=explanation,
+        # CALCULATE CONFIDENCE SCORE
+        confidence_score = _calculate_confidence_score(
+            recommendation['similarity'],
+            strategy.value,
+            len(validated_track_ids)
         )
+
+        response = RecommendationResponse(
+            recommended_track=recommended_track,
+            explanation=recommendation['explanation'],
+            confidence_score=confidence_score,
+            strategy_used=strategy.value
+        )
+
+        logger.info(f"Recommendation successful: {recommendation['track_id']}, confidence: {confidence_score:.2f}")
+
+        return response
 
     except HTTPException:
         raise
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected error in recommendation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while generating recommendation"
+        )
