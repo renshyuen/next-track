@@ -6,12 +6,21 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.metrics.pairwise import cosine_similarity
+from application.core.explainability import ExplainabilityEngine
 
 
 class NextTrackContentBasedRecommender:
-    """ """
+    """
+    Content-based recommender system for Next-Track API. 
+    """
 
     def __init__(self, tracks_dataframe: pd.DataFrame):
+        """
+        Initialise the recommender with the provided dataset.
+
+        Parameters:
+            tracks_dataframe (pd.DataFrame): Dataset containing track information and features
+        """
         self.dataframe = tracks_dataframe.reset_index(drop=True)
 
         # AUDIO FEATURES FOR SIMILARITY COMPUTATION
@@ -59,7 +68,9 @@ class NextTrackContentBasedRecommender:
         self.fit(tracks_dataframe)
 
     def fit(self, tracks_dataframe: pd.DataFrame):
-        """ """
+        """
+        Fits the recommender model on the provided dataset with feature processing.
+        """
         df = tracks_dataframe.copy().reset_index(drop=True)
         required_columns = ['track_id', 'track_title', 'artists']
         available_audio_features = [feature for feature in self.audio_features if feature in df.columns]
@@ -74,7 +85,7 @@ class NextTrackContentBasedRecommender:
         missing_columns = [column for column in all_required if column not in df.columns]
         
         if missing_columns:
-            raise ValueError(f"Dataset is missing columns: {sorted(missing)}")
+            raise ValueError(f"Dataset is missing columns: {sorted(missing_columns)}")
         
         # HANDLE ANY NaN VALUES
         df = df.dropna(subset=required_columns)
@@ -148,7 +159,17 @@ class NextTrackContentBasedRecommender:
         strategy: str = 'weighted_average',
         diversity_penalty: float = 0.0
     ) -> Optional[Dict[str, Any]]:
-        """ """
+        """
+        Get next track recommendation.
+
+        Parameters:
+            input_track_ids [list, str]: List of track IDs from listening history
+            preferences [dict]: Optional user preferences (e.g., {'valence': 0.8, 'energy': 0.6})
+            strategy [str]: Recommendation strategy ('weighted_average', 'recent_weighted', 'momentum')
+            
+        Returns:
+            Dictionary with recommended track info and explanation 
+        """
         if self.feature_matrix is None:
             raise RuntimeError("Recommender not fitted. Call fit() first.")
         
@@ -188,6 +209,7 @@ class NextTrackContentBasedRecommender:
         
         best_index = np.argmax(similarities)
 
+        # ADD TO RECOMMENDATION HISTORY
         recommended_track_id = str(self.track_ids[best_index])
         self.recent_recommendations.append(recommended_track_id)
         if len(self.recent_recommendations) > self.max_recommendations_history:
@@ -226,16 +248,16 @@ class NextTrackContentBasedRecommender:
         # APPLY WEIGHTS TO CONTEXTUAL FEATURES (IF PRESENT)
         offset = len(self.audio_features)
 
-        if 'release_year' in self.contextual_features:
-            weighted[:, offset] *= self.feature_weights.get('temporal_factor', 1.0)
-            offset += 1
-
         if 'mode' in self.contextual_features:
             weighted[:, offset] *= self.feature_weights.get('mode', 1.0)
             offset += 1
-        
+
         if 'popularity' in self.contextual_features:
             weighted[:, offset] *= self.feature_weights.get('popularity_factor', 1.0)
+            offset += 1
+        
+        if 'release_year' in self.contextual_features:
+            weighted[:, offset] *= self.feature_weights.get('temporal_factor', 1.0)
 
         return weighted
     
@@ -261,7 +283,7 @@ class NextTrackContentBasedRecommender:
         
         # EXPONENTIAL DECAY WEIGHTS (RECENT TRACKS HAVE HIGHER WEIGHT)
         weights = np.exp(np.linspace(-2, 0, len(indices)))
-        weights != weights.sum() 
+        weights /= weights.sum() 
         profile = np.average(self.weighted_feature_matrix[indices], axis=0, weights=weights)
 
         return self._normalise_profile(profile)
@@ -291,14 +313,39 @@ class NextTrackContentBasedRecommender:
     
     def _apply_preferences(self, profile: np.ndarray, preferences: Dict[str, Any]) -> np.ndarray:
         """
+        Apply user preferences to the profile vector.
+        Blends audio feature preferences, and nudges contextual features if provided.
         """
         adjusted_profile = profile.copy()
 
+        # AUDIO FEATURES
         for feature, target_value in preferences.items():
             if feature in self.audio_features:
                 index = self.audio_features.index(feature)
                 # BLEND CURRENT PROFILE WITH PREFERENCE
                 adjusted_profile[index] = 0.7 * profile[index] + 0.3 * target_value
+        
+        # CONTEXTUAL FEATURES
+        offset = len(self.audio_features)
+
+        if preferences.get('popular') and 'popularity' in self.contextual_features:
+            # POPULARITY INDEX DEPENDS ON WHETHER MODE IS PRESENT
+            popularity_index = offset 
+            if 'mode' in self.contextual_features:
+                popularity_index += 1
+            adjusted_profile[popularity_index] = 0.7 * adjusted_profile[popularity_index] + 0.3 * 1.0 # NUDGE TOWARDS POPULAR
+        
+        # TEMPORAL PREFERENCE (RECENT/CLASSIC)
+        if 'release_year' in self.contextual_features and preferences.get('temporal_preference'):
+            temporal_index = offset 
+            if 'mode' in self.contextual_features:
+                temporal_index += 1
+            if 'popularity' in self.contextual_features:
+                temporal_index += 1
+            if preferences['temporal_preference'] == 'recent':
+                adjusted_profile[temporal_index] = 0.7 * adjusted_profile[temporal_index] + 0.3 * 1.0
+            elif preferences['temporal_preference'] == 'classic':
+                adjusted_profile[temporal_index] = 0.7 * adjusted_profile[temporal_index] + 0.3 * 0.0
         
         return adjusted_profile
     
@@ -319,71 +366,101 @@ class NextTrackContentBasedRecommender:
         preferences: Optional[Dict[str, Any]]
     ) -> str:
         """
+        Generate explanation using the ExplainabilityEngine.
         """
-        explanations = []
-
         # GET FEATURE VALUES FOR RECOMMENDED TRACK
         recommended_features = self.feature_matrix[recommended_index][:len(self.audio_features)]
 
-        # FIND DOMINANT MATCHING FEATURES
+        # GET INPUT TRACK FEATURES (AVERAGE OF LAST 3 OR ALL IF LESS)
         input_indices = [self.track_id_to_index[track_id] for track_id in input_track_ids[-3:] if track_id in self.track_id_to_index]
 
-        if input_indices:
-            input_features = np.mean(self.feature_matrix[input_indices][:, :len(self.audio_features)], axis=0)
+        if not input_indices:
+            return "Recommended based on audio feature analysis."
+        
+        input_features = np.mean(self.feature_matrix[input_indices][:, :len(self.audio_features)], axis=0)
+
+        # CREATE FEATURE DICTIONARIES FOR THE EXPLAINABILITY ENGINE
+        input_feature_dictionary = {
+            feature: float(input_features[index]) for index, feature in enumerate(self.audio_features)
+        }
+        recommended_feature_dictionary = {
+            feature: float(recommended_features[index]) for index, feature in enumerate(self.audio_features)
+        }
+
+        explanation = ExplainabilityEngine.generate_comprehensive_explanation(
+            input_features=input_feature_dictionary,
+            recommended_features=recommended_feature_dictionary,
+            similarity_score=similarity,
+            strategy=strategy,
+            preferences=preferences
+        )
+
+        return explanation
+
+        # explanations = []
+
+        # GET FEATURE VALUES FOR RECOMMENDED TRACK
+        # recommended_features = self.feature_matrix[recommended_index][:len(self.audio_features)]
+
+        # FIND DOMINANT MATCHING FEATURES
+        # input_indices = [self.track_id_to_index[track_id] for track_id in input_track_ids[-3:] if track_id in self.track_id_to_index]
+
+        # if input_indices:
+        #     input_features = np.mean(self.feature_matrix[input_indices][:, :len(self.audio_features)], axis=0)
 
             # FIND FEATURES WITH HIGH SIMILARITY
-            feature_differences = np.abs(recommended_features - input_features)
-            similar_features = []
+            # feature_differences = np.abs(recommended_features - input_features)
+            # similar_features = []
 
-            for index, feature in enumerate(self.audio_features):
-                if feature_differences[index] < 0.2: # SIMILAR IF DIFFERENCE < 0.2
-                    if recommended_features[index] > 0.6: # HIGH VALUE
-                        if feature == 'energy':
-                            similar_features.append("high energy")
-                        elif feature == 'danceability':
-                            similar_features.append("danceable rhythm")
-                        elif feature == 'valence':
-                            similar_features.append("positive mood")
-                        elif feature == 'acousticness':
-                            similar_features.append("acoustic sound")
-                    elif recommended_features[index] < 0.3: # LOW VALUE
-                        if feature == 'energy':
-                            similar_features.append("mellow energy")
-                        elif feature == 'valence':
-                            similar_features.append("melancholic mood")
+            # for index, feature in enumerate(self.audio_features):
+            #     if feature_differences[index] < 0.2: # SIMILAR IF DIFFERENCE < 0.2
+            #         if recommended_features[index] > 0.6: # HIGH VALUE
+            #             if feature == 'energy':
+            #                 similar_features.append("high energy")
+            #             elif feature == 'danceability':
+            #                 similar_features.append("danceable rhythm")
+            #             elif feature == 'valence':
+            #                 similar_features.append("positive mood")
+            #             elif feature == 'acousticness':
+            #                 similar_features.append("acoustic sound")
+            #         elif recommended_features[index] < 0.3: # LOW VALUE
+            #             if feature == 'energy':
+            #                 similar_features.append("mellow energy")
+            #             elif feature == 'valence':
+            #                 similar_features.append("melancholic mood")
             
-            if similar_features:
-                explanations.append(f"Similar {', '.join(similar_features[:2])} to your recent tracks")
+            # if similar_features:
+            #     explanations.append(f"Similar {', '.join(similar_features[:2])} to your recent tracks")
         
         # ADD STRATEGY-BASED EXPLANATION
-        if strategy == 'momentum':
-            explanations.append("following the progression of your listening session")
-        elif strategy == 'recent weighted':
-            explanations.append("based on your most recent selections")
+        # if strategy == 'momentum':
+        #     explanations.append("following the progression of your listening session")
+        # elif strategy == 'recent weighted':
+        #     explanations.append("based on your most recent selections")
         
         # ADD PREFERENCE-BASED EXPLANATION
-        if preferences:
-            preference_features = []
-            for feature, value in preferences.items():
-                if feature == 'valence' and value > 0.7:
-                    preference_features.append("upbeat")
-                elif feature == 'energy' and value > 0.7:
-                    preference_features.append("energetic")
-                elif feature == 'tempo' and value > 120:
-                    preference_features.append("fast-paced")
-            if preference_features:
-                explanations.append(f"matching your preference for {' and '.join(preference_features)} musc")
+        # if preferences:
+        #     preference_features = []
+        #     for feature, value in preferences.items():
+        #         if feature == 'valence' and value > 0.7:
+        #             preference_features.append("upbeat")
+        #         elif feature == 'energy' and value > 0.7:
+        #             preference_features.append("energetic")
+        #         elif feature == 'tempo' and value > 120:
+        #             preference_features.append("fast-paced")
+        #     if preference_features:
+        #         explanations.append(f"matching your preference for {' and '.join(preference_features)} music")
         
         # ADD SIMILARITY SCORE CONTEXT
-        if similarity > 0.85:
-            explanations.append("(very strong match)")
-        elif similarity > 0.7:
-            explanations.append("(good match)")
+        # if similarity > 0.85:
+        #     explanations.append("(very strong match)")
+        # elif similarity > 0.7:
+        #     explanations.append("(good match)")
         
         # COMBINE EXPLANATIONS
-        if explanations:
-            explanation = ". ".join([e.capitalize() for e in explanations])
-        else:
-            explanation = "Recommended based on audio feature analysis of your input tracks."
+        # if explanations:
+        #     explanation = ". ".join([e.capitalize() for e in explanations])
+        # else:
+        #     explanation = "Recommended based on audio feature analysis of your input tracks."
         
         return explanation

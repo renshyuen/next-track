@@ -61,7 +61,7 @@ def _validate_and_process_user_input(request: TrackRequest) -> tuple:
     
     # LOG WARNING FOR INVALID IDS BUT CONTINUE WITH VALID ONES
     if invalid_track_ids:
-        logger.warning(f"Some track IDs not found: {invalid_ids}")
+        logger.warning(f"Some track IDs not found: {invalid_track_ids}")
     
     # PROCESS PREFERENCES IF PROVIDED
     processed_preferences = None 
@@ -93,6 +93,15 @@ def _validate_and_process_user_input(request: TrackRequest) -> tuple:
 
 def _calculate_confidence_score(similarity: float, strategy: str, num_input_tracks: int) -> float:
     """
+    Heuristic to calculate confidence score based on similarity, strategy, and number of input tracks.
+
+    Parameters:
+        similarity (float): Similarity score of the recommended track to the profile (0-1 range)
+        strategy (str): Recommendation strategy used
+        num_input_tracks (int): Number of input tracks provided by the user
+    
+    Returns:
+        Confidence score between 0 and 1.
     """
     base_confidence_score = similarity
 
@@ -121,7 +130,20 @@ summary="Get next track recommendation",
 description="Returns a recommended track based on input tracks and optional preferences"
 )
 async def recommend_next_track(request: TrackRequest):
-    """ """
+    """
+    Endpoint to get the next track recommendation based on user-provided track identifiers and preferences.
+    This endpoint uses content-based filtering with multiple strategies to recommend the most suitable next track.
+    It supports:
+        1. Multiple recommendation strategies (weighted average, recent weighted, momentum)
+        2. User preference parameters for fine-tuning
+        3. Textual explanations of why tracks were recommended
+
+    Parameters:
+        request (TrackRequest): Request body containing track IDs, preferences, and strategy
+
+    Returns:
+        RecommendationResponse: Recommended track details, explanation, and confidence score 
+    """
     try:
         # VALIDATE AND PROCESS USER INPUT
         validated_track_ids, processed_preferences = _validate_and_process_user_input(request)
@@ -183,3 +205,106 @@ async def recommend_next_track(request: TrackRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while generating recommendation"
         )
+
+@router.get(
+    '/recommend/strategies',
+    summary="List available recommendation strategies",
+    description="Returns a list of available recommendation strategies and their description"
+)
+async def get_recommendation_strategies_info():
+    """
+    Get available recommendation strategies.
+    """
+    return {
+        "strategies": [
+            {
+                "name": "weighted_average",
+                "description": "Uses weighted average of all input tracks",
+                "best_for": "General recommendations with consistent preferences"
+            },
+            {
+                "name": "recent_weighted",
+                "description": "Gives higher weight to more recent tracks",
+                "best_for": "Evolving listening sessions where recent tracks matter more"
+            },
+            {
+                "name": "momentum",
+                "description": "Detects trends in your listening and projects forward",
+                "best_for": "Progressive listening sessions with clear direction (requires 3+ tracks)"
+            }
+        ]
+    }
+
+@router.get(
+    '/recommend/audio_features',
+    summary="Get available audio features",
+    description="Returns information about audio features that can be used in preferences"
+)
+async def get_audio_features_info():
+    """
+    Get information about available audio features for preferences.
+    """
+    return {
+        "audio_features": [
+            {
+                "name": "valence",
+                "range": [0, 1],
+                "description": "Musical positivity - how happy/cheerful vs sad/depressed the track sounds",
+                "examples": {"happy": 0.8, "sad": 0.2, "neutral": 0.5}
+            },
+            {
+                "name": "energy",
+                "range": [0, 1],
+                "description": "Perceptual measure of intensity and activity",
+                "examples": {"high": 0.9, "medium": 0.5, "low": 0.2}
+            },
+            {
+                "name": "danceability",
+                "range": [0, 1],
+                "description": "How suitable a track is for dancing",
+                "examples": {"very_danceable": 0.8, "moderate": 0.5, "not_danceable": 0.2}
+            },
+            {
+                "name": "acousticness",
+                "range": [0, 1],
+                "description": "Confidence measure of whether the track is acoustic",
+                "examples": {"acoustic": 0.8, "mixed": 0.5, "electronic": 0.1}
+            },
+            {
+                "name": "instrumentalness",
+                "range": [0, 1],
+                "description": "Predicts whether a track contains no vocals",
+                "examples": {"instrumental": 0.9, "some_vocals": 0.5, "vocal_heavy": 0.1}
+            },
+            {
+                "name": "tempo",
+                "range": [60, 200],
+                "unit": "BPM",
+                "description": "The overall estimated tempo of a track",
+                "examples": {"slow": 70, "moderate": 120, "fast": 160}
+            }
+        ]
+    }
+
+@router.get(
+    '/recommend/stats',
+    summary="Get recommender statistics",
+    description="Returns statistics about the recommender system"
+)
+async def get_recommender_statistics():
+    """
+    Get statistics about the recommender system.
+    """
+    return {
+        "total_tracks": len(recommender.dataframe),
+        "available_features": recommender.audio_features,
+        # "recent_recommendations": len(recommender.recent_recommendations),
+        "dataset_info": {
+            "earliest_year": int(recommender.dataframe['release_year'].min()) 
+                            if 'release_year' in recommender.dataframe.columns else None,
+            "latest_year": int(recommender.dataframe['release_year'].max())
+                          if 'release_year' in recommender.dataframe.columns else None,
+            "unique_artists": len(recommender.dataframe['artists'].unique())
+                             if 'artists' in recommender.dataframe.columns else None
+        }
+    }
