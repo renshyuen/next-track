@@ -77,7 +77,7 @@ class NextTrackContentBasedRecommender:
         available_contextual_features = [feature for feature in self.contextual_features if feature in df.columns]
 
         if not available_audio_features:
-            raise ValueError("No audio features found in the dataset.")
+            raise ValueError("Dataset is missing columns")
         
         self.audio_features = available_audio_features
         self.contextual_features = available_contextual_features

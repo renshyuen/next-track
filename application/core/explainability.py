@@ -176,7 +176,7 @@ class ExplainabilityEngine:
             if feature in from_features and feature in to_features:
                 difference = to_features[feature] - from_features[feature]
 
-                if abs(difference) > threshold:
+                if abs(difference) >= threshold:
                     if difference > 0:
                         if feature == 'energy':
                             transitions.append("building energy")
