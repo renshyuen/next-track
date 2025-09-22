@@ -210,11 +210,13 @@ class TestAPIEndpoints:
             
             response = client.post("/api/recommend", json=request_data)
             
-            # Check that all strategies are handled
+            # CHECK THAT ALL STRATEGIES ARE HANDLED
             assert response.status_code in [200, 404]
     
     def test_recommend_duplicate_track_ids(self, client):
-        """Test recommendation with duplicate track IDs."""
+        """
+        Test recommendation with duplicate track IDs.
+        """
         request_data = {
             "track_ids": ["track_000", "track_000", "track_001"],
             "strategy": "weighted_average"
@@ -222,11 +224,13 @@ class TestAPIEndpoints:
         
         response = client.post("/api/recommend", json=request_data)
         
-        # Should handle duplicates gracefully
+        # SHOULD HANDLE DUPLICATES GRACEFULLY
         assert response.status_code in [200, 404]
     
     def test_recommend_response_schema(self, client):
-        """Test that response matches expected schema."""
+        """
+        Test that response matches expected schema.
+        """
         request_data = {
             "track_ids": ["track_000", "track_001"],
             "preferences": {
@@ -241,19 +245,19 @@ class TestAPIEndpoints:
         if response.status_code == 200:
             data = response.json()
             
-            # Check all required fields are present
+            # CHECK ALL REQUIRED FIELDS ARE PRESENT
             assert "recommended_track" in data
             assert "explanation" in data
             assert "confidence_score" in data
             assert "strategy_used" in data
             
-            # Check data types
+            # CHECK DATA TYPES
             assert isinstance(data["explanation"], str)
             assert isinstance(data["confidence_score"], (int, float))
             assert 0 <= data["confidence_score"] <= 1
             assert data["strategy_used"] in ["weighted_average", "recent_weighted", "momentum"]
             
-            # Check recommended track schema
+            # CHECK RECOMMENDED TRACK SCHEMA
             track = data["recommended_track"]
             assert isinstance(track["track_id"], str)
             assert isinstance(track["track_title"], str)
@@ -261,16 +265,22 @@ class TestAPIEndpoints:
 
 
 class TestPreferenceValidation:
-    """Test preference parameter validation."""
+    """
+    Test preference parameter validation.
+    """
     
     @pytest.fixture
     def client(self):
-        """Create a test client."""
+        """
+        Create a test client.
+        """
         return TestClient(app)
     
     def test_valence_range_validation(self, client):
-        """Test valence parameter range validation."""
-        # Valid valence
+        """
+        Test valence parameter range validation.
+        """
+        # VALID VALENCE
         request_data = {
             "track_ids": ["track_000"],
             "preferences": {"valence": 0.5}
@@ -278,19 +288,21 @@ class TestPreferenceValidation:
         response = client.post("/api/recommend", json=request_data)
         assert response.status_code in [200, 404]
         
-        # Invalid valence (too high)
+        # INVALID VALENCE (TOO HIGH)
         request_data["preferences"]["valence"] = 1.1
         response = client.post("/api/recommend", json=request_data)
         assert response.status_code == 422
         
-        # Invalid valence (too low)
+        # INVALID VALENCE (TOO LOW)
         request_data["preferences"]["valence"] = -0.1
         response = client.post("/api/recommend", json=request_data)
         assert response.status_code == 422
     
     def test_tempo_range_validation(self, client):
-        """Test tempo parameter range validation."""
-        # Valid tempo
+        """
+        Test tempo parameter range validation.
+        """
+        # VALID TEMPO
         request_data = {
             "track_ids": ["track_000"],
             "preferences": {"tempo": 120}
@@ -298,18 +310,20 @@ class TestPreferenceValidation:
         response = client.post("/api/recommend", json=request_data)
         assert response.status_code in [200, 404]
         
-        # Invalid tempo (too high)
+        # INVALID TEMPO (TOO HIGH)
         request_data["preferences"]["tempo"] = 201
         response = client.post("/api/recommend", json=request_data)
         assert response.status_code == 422
         
-        # Invalid tempo (too low)
+        # INVALID TEMPO (TOO LOW)
         request_data["preferences"]["tempo"] = 59
         response = client.post("/api/recommend", json=request_data)
         assert response.status_code == 422
     
     def test_temporal_preference_validation(self, client):
-        """Test temporal preference validation."""
+        """
+        Test temporal preference validation.
+        """
         valid_preferences = ["recent", "classic", "any", None]
         
         for pref in valid_preferences:
@@ -322,15 +336,21 @@ class TestPreferenceValidation:
 
 
 class TestErrorHandling:
-    """Test error handling in API endpoints."""
+    """
+    Test error handling in API endpoints.
+    """
     
     @pytest.fixture
     def client(self):
-        """Create a test client."""
+        """
+        Create a test client.
+        """
         return TestClient(app)
     
     def test_malformed_json(self, client):
-        """Test handling of malformed JSON."""
+        """
+        Test handling of malformed JSON.
+        """
         response = client.post(
             "/api/recommend",
             data="not valid json",
@@ -339,8 +359,10 @@ class TestErrorHandling:
         assert response.status_code == 422
     
     def test_missing_required_fields(self, client):
-        """Test handling of missing required fields."""
-        # Missing track_ids
+        """
+        Test handling of missing required fields.
+        """
+        # MISSING TRACK IDS
         request_data = {
             "strategy": "weighted_average"
         }
@@ -349,8 +371,10 @@ class TestErrorHandling:
     
     @patch('application.api.endpoints.recommend.recommender.next_track')
     def test_internal_server_error(self, mock_next_track, client):
-        """Test handling of internal server errors."""
-        # Make the recommender raise an exception
+        """
+        Test handling of internal server errors.
+        """
+        # MAKE THE RECOMMENDER RAISE AN EXCEPTION
         mock_next_track.side_effect = Exception("Internal error")
         
         request_data = {
@@ -360,6 +384,6 @@ class TestErrorHandling:
         
         response = client.post("/api/recommend", json=request_data)
         
-        # Should handle the error gracefully
+        # SHOULD HANDLE THE ERROR GRACEFULLY
         assert response.status_code in [404, 500]
         assert "detail" in response.json()

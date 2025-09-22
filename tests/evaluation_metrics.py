@@ -70,17 +70,19 @@ class RecommendationEvaluator:
                         mask = (energy_bins == energy_level) & (valence_bins == valence_level)
                         cluster_tracks = df[mask]['track_id'].tolist()
                         
-                        # Create 1-2 playlists per cluster
+                        # CREATE 1-2 PLAYLISTS PER CLUSTER
                         if len(cluster_tracks) >= 10:
-                            # Random sample tracks for playlist
+                            # RANDOM SAMPLE TRACKS FOR PLAYLIST
                             n_playlists_from_cluster = min(2, len(cluster_tracks) // 20)
                             for _ in range(max(1, n_playlists_from_cluster)):
                                 if len(playlists) >= max_playlists:
                                     break
                                 playlist_size = min(20, len(cluster_tracks))
-                                playlist = np.random.choice(cluster_tracks, 
-                                                          size=playlist_size, 
-                                                          replace=False).tolist()
+                                playlist = np.random.choice(
+                                    cluster_tracks, 
+                                    size=playlist_size, 
+                                    replace=False
+                                ).tolist()
                                 playlists.append(playlist)
             except Exception as e:
                 logger.warning(f"Error creating energy/valence playlists: {e}")
@@ -94,9 +96,9 @@ class RecommendationEvaluator:
                 if len(random_tracks) >= 5:
                     playlists.append(random_tracks)
         
-        # STRATEGY 3: Create some artist-based playlists if possible
+        # STRATEGY 3: CREATE SOME ARTIST-BASED PLAYLISTS IF POSSIBLE
         if 'artists' in df.columns and len(playlists) < max_playlists:
-            # Get top artists by track count
+            # GET TOP ARTISTS BY TRACK COUNT
             artist_counts = df['artists'].value_counts()
             top_artists = artist_counts[artist_counts >= 5].head(20).index
             
@@ -108,7 +110,7 @@ class RecommendationEvaluator:
                     playlist = artist_tracks[:min(15, len(artist_tracks))]
                     playlists.append(playlist)
         
-        # Ensure we have at least some playlists
+        # ENSURE WE HAVE AT LEAST SOME PLAYLISTS
         if len(playlists) == 0:
             logger.warning("No playlists created from clustering, using random sampling")
             for _ in range(min(50, max_playlists)):

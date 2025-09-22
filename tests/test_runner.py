@@ -446,7 +446,7 @@ if __name__ == "__main__":
     # INITIALISE TEST RUNNER
     runner = TestRunner(dataset_path=args.dataset)
     
-    # Run requested tests
+    # RUN REQUESTED TESTS
     if args.unit:
         runner.run_unit_tests()
     elif args.integration:
@@ -458,10 +458,9 @@ if __name__ == "__main__":
     elif args.cv:
         runner.run_cross_validation()
     else:
-        # Run all tests by default
+        # RUN ALL TESTS BY DEFAULT
         runner.run_all_tests()
     
-    # Generate report
     runner.generate_report()
     
     print(f"\n Test suite completed. Results saved to: {runner.current_results_dir}")
