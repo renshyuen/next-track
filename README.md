@@ -3,9 +3,7 @@
 Next-Track is a stateless, privacy-respecting music recommendation API. Given a list of Spotify track identifiers (and optional preference parameters), the system returns a single recommended track along with a textual explanation of why it was chosen. 
 
 <aside>
-💡
-
-Next-Track does not track users or store personal data. All requests are independent, making the system lightweight and privacy-respecting.
+💡 Next-Track does not track users or store personal data. All requests are independent, making the system lightweight and privacy-respecting.
 
 </aside>
 
@@ -25,11 +23,9 @@ Next-Track does not track users or store personal data. All requests are indepen
 - Python Virtual Environment (recommended)
 
 <aside>
-⚠️
 
-**Important:**
-
-You must provide **Spotify track** **identifiers** as input to the API. These identifiers can be copied directly from the Spotify desktop/mobile app (Right-click track → Share → Copy Song Link) or retrieved via the Spotify Web API.
+**Important**
+⚠️ You must provide **Spotify track** **identifiers** as input to the API. These identifiers can be copied directly from the provided csv dataset (see below).
 
 </aside>
 
